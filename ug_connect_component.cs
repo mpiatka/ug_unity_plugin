@@ -26,6 +26,9 @@ public class ug_connect_component : MonoBehaviour
     FileStream m_fifo;
     BlockingCollection<UgFrame> frameQueue;
 
+    Thread reader;
+    CancellationTokenSource cancelTokSrc;
+
     // Start is called before the first frame update
     void Start()
     {
@@ -36,42 +39,45 @@ public class ug_connect_component : MonoBehaviour
 
         frameQueue = new BlockingCollection<UgFrame>(2);
 
-        Thread reader = new Thread(readerThread);
+        cancelTokSrc = new CancellationTokenSource();
+        reader = new Thread(readerThread);
         reader.IsBackground = true;
         reader.Start();
     }
 
-    void blockingRead(Stream s, byte[] buf, int size){
+    void blockingRead(Stream s, byte[] buf, int size, CancellationToken tok){
         int read = 0;
 
-        while(read < size){
+        while(read < size && !tok.IsCancellationRequested){
             read += s.Read(buf, read, size - read);
         }
     }
 
-    bool readFrame(UgFrame f){
+    bool readFrame(UgFrame f, CancellationToken tok){
         byte[] header = new byte[128];
 
-        blockingRead(m_fifo, header, 128);
+        blockingRead(m_fifo, header, 128, tok);
 
         f.width = System.BitConverter.ToInt32(header, 0);
         f.height = System.BitConverter.ToInt32(header, 4);
         f.dataLen = System.BitConverter.ToInt32(header, 8);
         f.data = new byte[f.dataLen];
 
-        blockingRead(m_fifo, f.data, f.dataLen);
+        blockingRead(m_fifo, f.data, f.dataLen, tok);
 
         return true;
     }
 
     void readerThread(){
 
+        CancellationToken token = cancelTokSrc.Token;
+
         m_fifo = File.OpenRead("/tmp/fifo");
 
-        while(true){
+        while(!token.IsCancellationRequested){
             UgFrame f = new UgFrame();
 
-            readFrame(f);
+            readFrame(f, token);
 
             frameQueue.Add(f);
         }
@@ -98,5 +104,12 @@ public class ug_connect_component : MonoBehaviour
             return;
 
         UpdateTexture(f);
+    }
+
+    void OnApplicationQuit()
+    {
+        cancelTokSrc.Cancel();
+        reader.Join();
+        cancelTokSrc.Dispose();
     }
 }
