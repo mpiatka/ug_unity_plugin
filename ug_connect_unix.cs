@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Threading;
 using System.Collections;
@@ -8,14 +9,23 @@ using UnityEngine;
 
 public class ug_connect_unix : MonoBehaviour
 {
+    private enum PixFmt{
+        None = 0,
+        RGBA = 1,
+        UYVY = 2,
+        RGB = 11
+    }
+
     private class UgFrame
     {
         public int width;
         public int height;
+        public PixFmt fmt;
 
         public byte[] data;
         public int dataLen;
     }
+
 
     [SerializeField]
     GameObject m_plane;
@@ -34,7 +44,7 @@ public class ug_connect_unix : MonoBehaviour
     {
         m_material = m_plane.GetComponent<Renderer>().material;
         m_mesh = m_plane.GetComponent<Mesh>();
-        m_tex = new Texture2D(128, 128, TextureFormat.RGBA32, false);
+        m_tex = new Texture2D(128, 128, TextureFormat.RGB24, false);
         m_material.mainTexture = m_tex;
 
         frameQueue = new BlockingCollection<UgFrame>(2);
@@ -71,6 +81,7 @@ public class ug_connect_unix : MonoBehaviour
         f.width = System.BitConverter.ToInt32(header, 0);
         f.height = System.BitConverter.ToInt32(header, 4);
         f.dataLen = System.BitConverter.ToInt32(header, 8);
+        f.fmt = (PixFmt) System.BitConverter.ToInt32(header, 12);
         f.data = new byte[f.dataLen];
 
 		int read = blockingRead(sock, f.data, f.dataLen, tok);
@@ -140,7 +151,18 @@ public class ug_connect_unix : MonoBehaviour
 		Debug.Log("client disconnected");
 		sock.Close();
 		sock.Dispose();
-	}
+    }
+
+    TextureFormat unityFmtFromPixFmt(PixFmt fmt){
+        switch(fmt){
+            case PixFmt.RGBA:
+                return TextureFormat.RGBA32;
+            case PixFmt.RGB:
+                return TextureFormat.RGB24;
+            default:
+                throw new ArgumentException("Unsupported pix fmt " + fmt);
+        }
+    }
 
     void UpdateTexture(UgFrame f){
         float aspect = (float) f.width / f.height;
@@ -148,8 +170,10 @@ public class ug_connect_unix : MonoBehaviour
         var texScale = aspect > 1 ? new Vector3(-1, 1, 1 / aspect) : new Vector3(-aspect, 1, 1);
         m_plane.transform.localScale = texScale;
 
-        if(m_tex.width != f.width || m_tex.height != f.height)
-            m_tex.Reinitialize(f.width, f.height, TextureFormat.RGBA32, false);
+        var fmt = unityFmtFromPixFmt(f.fmt);
+
+        if(m_tex.width != f.width || m_tex.height != f.height || m_tex.format != fmt)
+            m_tex.Reinitialize(f.width, f.height, fmt, false);
 
         m_tex.LoadRawTextureData(f.data);
         m_tex.Apply();
